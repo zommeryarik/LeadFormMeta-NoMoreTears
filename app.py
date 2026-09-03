@@ -41,47 +41,66 @@ def handle_webhook():
     return 'EVENT_RECEIVED', 200
 
 def process_lead(leadgen_id):
-    # Запрашиваем данные лида у Facebook Graph API
+    # 1. Добавляем параметр fields, чтобы запросить данные о рекламе
     graph_url = f"https://graph.facebook.com/v19.0/{leadgen_id}"
-    params = {'access_token': PAGE_ACCESS_TOKEN}
+    params = {
+        'access_token': PAGE_ACCESS_TOKEN,
+        'fields': 'field_data,created_time,campaign_name,ad_name,platform'
+    }
     
     response = requests.get(graph_url, params=params).json()
+    
+    # Полезно для дебага: в логах Render вы увидите весь ответ Meta
+    print("META API RESPONSE:", response)
     
     if 'field_data' not in response:
         return
 
-    # Создаем словарь для удобного поиска полей
-    lead_data = {}
+    # Базовые поля
+    full_name = 'Не вказано'
+    phone = 'Не вказано'
+    
+    # Список для сбора всех кастомных вопросов из формы
+    custom_answers = []
+
+    # 2. Динамический парсинг полей
     for field in response['field_data']:
         name = field['name']
         val = field['values'][0] if field['values'] else 'Не вказано'
-        lead_data[name] = val
+        
+        if name == 'full_name':
+            full_name = val
+        elif name == 'phone_number':
+            phone = val
+        else:
+            # Все остальные вопросы формы (классы, предметы) попадут сюда автоматически
+            # Meta пришлет свой короткий ключ, но мы выведем его вместе с ответом
+            custom_answers.append(f"▫️ <b>{name}:</b> {val}")
 
-    # Достаем базовые поля (в Meta API они называются full_name и phone_number)
-    full_name = lead_data.get('full_name', 'Не вказано')
-    phone = lead_data.get('phone_number', 'Не вказано')
-    
-    # Достаем кастомные вопросы (берем точные названия из вашей формы)
-    grade = lead_data.get('Оберіть у якому класі навчається дитина', 'Не вказано')
-    subject = lead_data.get('Оберіть предмет', 'Не вказано')
-    
-    # Берем время создания лида и форматируем его
+    # Склеиваем кастомные вопросы в один текст
+    custom_text = "\n".join(custom_answers) if custom_answers else "▫️ Немає додаткових відповідей"
+
+    # 3. Достаем аналитику (если лид органический, этих полей может не быть)
+    campaign = response.get('campaign_name', 'Органіка / Невідомо')
+    ad_name = response.get('ad_name', 'Невідомо')
+    platform = response.get('platform', 'fb').upper()
     created_time = response.get('created_time', 'Невідомо')
 
-    # Формируем красивое сообщение для Telegram с эмодзи и HTML-разметкой
+    # 4. Формируем красивое сообщение
     msg = (
         "🔥 <b>Новий лід!</b>\n\n"
         f"👤 <b>Ім'я:</b> {full_name}\n"
         f"📞 <b>Телефон:</b> {phone}\n\n"
-        f"🎓 <b>Клас:</b> {grade}\n"
-        f"📚 <b>Предмет:</b> {subject}\n\n"
+        f"📋 <b>Відповіді з форми:</b>\n{custom_text}\n\n"
+        f"📊 <b>Аналітика:</b>\n"
+        f"📢 <b>Кампанія:</b> {campaign}\n"
+        f"🎯 <b>Оголошення:</b> {ad_name}\n"
+        f"📱 <b>Платформа:</b> {platform}\n\n"
         f"🕒 <i>Час заявки: {created_time}</i>"
     )
         
-    # Отправляем в Telegram
     tg_url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
     
-    # Добавляем parse_mode='HTML', чтобы бот понимал теги <b> и <i>
     requests.post(tg_url, json={
         'chat_id': TG_CHAT_ID, 
         'text': msg,
